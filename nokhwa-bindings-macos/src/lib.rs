@@ -933,7 +933,7 @@ mod internal {
             }
         }
 
-        pub fn lock(&self) -> Result<(), NokhwaError> {
+        pub fn lock(&mut self) -> Result<(), NokhwaError> {
             if self.locked {
                 return Ok(());
             }
@@ -960,6 +960,7 @@ mod internal {
                     error: "Lock Rejected".to_string(),
                 });
             }
+            self.locked = true;
             Ok(())
         }
 
@@ -1005,6 +1006,7 @@ mod internal {
             }
 
             if selected_range.is_null() || selected_format.is_null() {
+                self.unlock();
                 return Err(NokhwaError::SetPropertyError {
                     property: "CameraFormat".to_string(),
                     value: descriptor.to_string(),
