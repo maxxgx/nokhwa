@@ -15,8 +15,9 @@
  */
 use crate::error::NokhwaError;
 use crate::types::{
-    buf_bgr_to_rgb, buf_mjpeg_to_rgb, buf_nv12_to_rgb, buf_yuyv422_to_rgb, color_frame_formats,
-    frame_formats, mjpeg_to_rgb, nv12_to_rgb, yuyv422_to_rgb, FrameFormat, Resolution,
+    bayer_grbg16_to_rgb, buf_bayer_grbg16_to_rgb, buf_bgr_to_rgb, buf_mjpeg_to_rgb,
+    buf_nv12_to_rgb, buf_yuyv422_to_rgb, color_frame_formats, frame_formats, mjpeg_to_rgb,
+    nv12_to_rgb, yuyv422_to_rgb, FrameFormat, Resolution,
 };
 use image::{Luma, LumaA, Pixel, Rgb, Rgba};
 use std::fmt::Debug;
@@ -87,6 +88,8 @@ impl FormatDecoder for RgbFormat {
                 Ok(rgb)
             }
             FrameFormat::NV12 => nv12_to_rgb(resolution, data, false),
+            FrameFormat::BA10 => bayer_grbg16_to_rgb(resolution, data, 10, false),
+            FrameFormat::BA12 => bayer_grbg16_to_rgb(resolution, data, 12, false),
         }
     }
 
@@ -123,6 +126,8 @@ impl FormatDecoder for RgbFormat {
             }
             FrameFormat::RAWBGR => buf_bgr_to_rgb(resolution, data, dest),
             FrameFormat::NV12 => buf_nv12_to_rgb(resolution, data, dest, false),
+            FrameFormat::BA10 => buf_bayer_grbg16_to_rgb(resolution, data, 10, dest, false),
+            FrameFormat::BA12 => buf_bayer_grbg16_to_rgb(resolution, data, 12, dest, false),
         }
     }
 }
@@ -166,6 +171,8 @@ impl FormatDecoder for RgbAFormat {
                 .flat_map(|x| [x[2], x[1], x[0], 255])
                 .collect()),
             FrameFormat::NV12 => nv12_to_rgb(resolution, data, true),
+            FrameFormat::BA10 => bayer_grbg16_to_rgb(resolution, data, 10, true),
+            FrameFormat::BA12 => bayer_grbg16_to_rgb(resolution, data, 12, true),
         }
     }
 
@@ -219,6 +226,8 @@ impl FormatDecoder for RgbAFormat {
                 Ok(())
             }
             FrameFormat::NV12 => buf_nv12_to_rgb(resolution, data, dest, true),
+            FrameFormat::BA10 => buf_bayer_grbg16_to_rgb(resolution, data, 10, dest, true),
+            FrameFormat::BA12 => buf_bayer_grbg16_to_rgb(resolution, data, 12, dest, true),
         }
     }
 }
@@ -282,6 +291,24 @@ impl FormatDecoder for LumaFormat {
                 .chunks(3)
                 .map(|px| ((i32::from(px[2]) + i32::from(px[1]) + i32::from(px[0])) / 3) as u8)
                 .collect()),
+            FrameFormat::BA10 => Ok(bayer_grbg16_to_rgb(resolution, data, 10, false)?
+                .as_slice()
+                .chunks_exact(3)
+                .map(|x| {
+                    let mut avg = 0;
+                    x.iter().for_each(|v| avg += u16::from(*v));
+                    (avg / 3) as u8
+                })
+                .collect()),
+            FrameFormat::BA12 => Ok(bayer_grbg16_to_rgb(resolution, data, 12, false)?
+                .as_slice()
+                .chunks_exact(3)
+                .map(|x| {
+                    let mut avg = 0;
+                    x.iter().for_each(|v| avg += u16::from(*v));
+                    (avg / 3) as u8
+                })
+                .collect()),
         }
     }
 
@@ -294,13 +321,15 @@ impl FormatDecoder for LumaFormat {
     ) -> Result<(), NokhwaError> {
         match fcc {
             // TODO: implement!
-            FrameFormat::MJPEG | FrameFormat::YUYV | FrameFormat::NV12 => {
-                Err(NokhwaError::ProcessFrameError {
-                    src: fcc,
-                    destination: "RGB => Luma".to_string(),
-                    error: "Conversion Error".to_string(),
-                })
-            }
+            FrameFormat::MJPEG
+            | FrameFormat::YUYV
+            | FrameFormat::NV12
+            | FrameFormat::BA10
+            | FrameFormat::BA12 => Err(NokhwaError::ProcessFrameError {
+                src: fcc,
+                destination: "RGB => Luma".to_string(),
+                error: "Conversion Error".to_string(),
+            }),
             FrameFormat::GRAY => {
                 data.iter().zip(dest.iter_mut()).for_each(|(pxv, d)| {
                     *d = *pxv;
@@ -381,6 +410,24 @@ impl FormatDecoder for LumaAFormat {
                 destination: "BGR => LumaA".to_string(),
                 error: "Conversion Error".to_string(),
             }),
+            FrameFormat::BA10 => Ok(bayer_grbg16_to_rgb(resolution, data, 10, false)?
+                .as_slice()
+                .chunks_exact(3)
+                .flat_map(|x| {
+                    let mut avg = 0;
+                    x.iter().for_each(|v| avg += u16::from(*v));
+                    [(avg / 3) as u8, 255]
+                })
+                .collect()),
+            FrameFormat::BA12 => Ok(bayer_grbg16_to_rgb(resolution, data, 12, false)?
+                .as_slice()
+                .chunks_exact(3)
+                .flat_map(|x| {
+                    let mut avg = 0;
+                    x.iter().for_each(|v| avg += u16::from(*v));
+                    [(avg / 3) as u8, 255]
+                })
+                .collect()),
         }
     }
 
@@ -437,6 +484,16 @@ impl FormatDecoder for LumaAFormat {
             FrameFormat::RAWBGR => Err(NokhwaError::ProcessFrameError {
                 src: fcc,
                 destination: "BGR => LumaA".to_string(),
+                error: "Conversion Error".to_string(),
+            }),
+            FrameFormat::BA10 => Err(NokhwaError::ProcessFrameError {
+                src: fcc,
+                destination: "BA10 => LumaA".to_string(),
+                error: "Conversion Error".to_string(),
+            }),
+            FrameFormat::BA12 => Err(NokhwaError::ProcessFrameError {
+                src: fcc,
+                destination: "BA12 => LumaA".to_string(),
                 error: "Conversion Error".to_string(),
             }),
         }

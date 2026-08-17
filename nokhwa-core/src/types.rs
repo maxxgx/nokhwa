@@ -291,6 +291,9 @@ impl TryFrom<CameraIndex> for usize {
 /// - MJPEG is a motion-jpeg compressed frame, it allows for high frame rates.
 /// - GRAY is a grayscale image format, usually for specialized cameras such as IR Cameras.
 /// - RAWRGB is a Raw RGB888 format.
+/// - BA10 is a raw 10-bit Bayer GRBG format straight off the sensor (V4L2 `SGRBG10`/`BA10`),
+///   packed as one little-endian `u16` per pixel with the sample in the low 10 bits.
+/// - BA12 is the same as BA10, but with 12 bits of sample per pixel (V4L2 `SGRBG12`/`BA12`).
 #[derive(Copy, Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub enum FrameFormat {
@@ -300,6 +303,8 @@ pub enum FrameFormat {
     GRAY,
     RAWRGB,
     RAWBGR,
+    BA10,
+    BA12,
 }
 
 impl Display for FrameFormat {
@@ -323,6 +328,12 @@ impl Display for FrameFormat {
             FrameFormat::NV12 => {
                 write!(f, "NV12")
             }
+            FrameFormat::BA10 => {
+                write!(f, "BA10")
+            }
+            FrameFormat::BA12 => {
+                write!(f, "BA12")
+            }
         }
     }
 }
@@ -337,6 +348,8 @@ impl FromStr for FrameFormat {
             "RAWRGB" => Ok(FrameFormat::RAWRGB),
             "RAWBGR" => Ok(FrameFormat::RAWBGR),
             "NV12" => Ok(FrameFormat::NV12),
+            "BA10" => Ok(FrameFormat::BA10),
+            "BA12" => Ok(FrameFormat::BA12),
             _ => Err(NokhwaError::StructureError {
                 structure: "FrameFormat".to_string(),
                 error: format!("No match for {s}"),
@@ -355,6 +368,8 @@ pub const fn frame_formats() -> &'static [FrameFormat] {
         FrameFormat::GRAY,
         FrameFormat::RAWRGB,
         FrameFormat::RAWBGR,
+        FrameFormat::BA10,
+        FrameFormat::BA12,
     ]
 }
 
@@ -367,6 +382,8 @@ pub const fn color_frame_formats() -> &'static [FrameFormat] {
         FrameFormat::NV12,
         FrameFormat::RAWRGB,
         FrameFormat::RAWBGR,
+        FrameFormat::BA10,
+        FrameFormat::BA12,
     ]
 }
 
@@ -1872,4 +1889,202 @@ pub fn buf_bgr_to_rgb(
     }
 
     Ok(())
+}
+
+/// Converts a packed, unpacked-per-16-bits raw Bayer GRBG datastream (as produced by the
+/// V4L2 `BA10`/`BA12` raw sensor formats, i.e. `V4L2_PIX_FMT_SGRBG10`/`V4L2_PIX_FMT_SGRBG12`)
+/// into an RGB888 stream.
+///
+/// Each pixel is stored as a little-endian `u16` with the actual sample in the low `bits`
+/// bits (10 or 12). A fast, allocation-light demosaic is used: every 2x2 GRBG block
+/// (`G R` over `B G`) is resolved into a single RGB triplet - averaging the two green
+/// samples - and that triplet is replicated across the whole block, so the output keeps
+/// the same resolution as the input.
+/// # Errors
+/// This may error when the resolution is not divisible by 2, or the input/output buffer
+/// sizes don't match the given resolution.
+#[inline]
+pub fn bayer_grbg16_to_rgb(
+    resolution: Resolution,
+    data: &[u8],
+    bits: u32,
+    rgba: bool,
+) -> Result<Vec<u8>, NokhwaError> {
+    let pxsize = if rgba { 4 } else { 3 };
+    let mut dest = vec![0; (pxsize * resolution.width() * resolution.height()) as usize];
+    buf_bayer_grbg16_to_rgb(resolution, data, bits, &mut dest, rgba)?;
+    Ok(dest)
+}
+
+/// Same as [`bayer_grbg16_to_rgb`] but with a destination buffer instead of a return `Vec<u8>`
+/// # Errors
+/// If the stream is an invalid size for the given resolution, or the destination buffer is
+/// not large enough, this will error.
+#[allow(clippy::similar_names)]
+#[allow(clippy::cast_possible_truncation)]
+#[inline]
+pub fn buf_bayer_grbg16_to_rgb(
+    resolution: Resolution,
+    data: &[u8],
+    bits: u32,
+    out: &mut [u8],
+    rgba: bool,
+) -> Result<(), NokhwaError> {
+    let src_fmt = if bits > 10 {
+        FrameFormat::BA12
+    } else {
+        FrameFormat::BA10
+    };
+
+    let width = resolution.width() as usize;
+    let height = resolution.height() as usize;
+
+    if width % 2 != 0 || height % 2 != 0 {
+        return Err(NokhwaError::ProcessFrameError {
+            src: src_fmt,
+            destination: "RGB".to_string(),
+            error: "bad resolution (width/height must be divisible by 2 for GRBG bayer)"
+                .to_string(),
+        });
+    }
+
+    // Rows are read tightly packed (stride = width * 2, matching how v4l2 reports
+    // this format for the sensors we've seen it on). Some v4l2 CSI drivers append
+    // extra bytes after the pixel data itself - e.g. an embedded metadata/register
+    // readback line - inflating `sizeimage` without changing the reported `height`,
+    // so the buffer is allowed to be larger than the pixel data requires; any
+    // trailing bytes beyond that are simply ignored (this is also what gstreamer's
+    // `bayer2rgb` does with the same raw buffers).
+    let stride = width * 2;
+    let min_size = stride * height;
+    if data.len() < min_size {
+        return Err(NokhwaError::ProcessFrameError {
+            src: src_fmt,
+            destination: "RGB".to_string(),
+            error: format!(
+                "bad input buffer size: got {} bytes, need at least {} for {width}x{height} ({stride} bytes/row)",
+                data.len(),
+                min_size,
+            ),
+        });
+    }
+
+    let pxsize = if rgba { 4 } else { 3 };
+
+    if out.len() != pxsize * width * height {
+        return Err(NokhwaError::ProcessFrameError {
+            src: src_fmt,
+            destination: "RGB".to_string(),
+            error: format!(
+                "bad output buffer size: got {} bytes, expected {}",
+                out.len(),
+                pxsize * width * height
+            ),
+        });
+    }
+
+    // Samples are stored as little-endian u16 with the value in the low `bits` bits.
+    let shift = bits.saturating_sub(8);
+    let sample = |x: usize, y: usize| -> u8 {
+        let idx = y * stride + x * 2;
+        let raw = u16::from_le_bytes([data[idx], data[idx + 1]]);
+        (raw >> shift) as u8
+    };
+
+    for by in (0..height).step_by(2) {
+        for bx in (0..width).step_by(2) {
+            // GRBG layout:
+            // G R
+            // B G
+            let g1 = sample(bx, by);
+            let r = sample(bx + 1, by);
+            let b = sample(bx, by + 1);
+            let g2 = sample(bx + 1, by + 1);
+            let g = ((u16::from(g1) + u16::from(g2)) / 2) as u8;
+
+            for (dy, dx) in [(0_usize, 0_usize), (0, 1), (1, 0), (1, 1)] {
+                let base = ((by + dy) * width + (bx + dx)) * pxsize;
+                out[base] = r;
+                out[base + 1] = g;
+                out[base + 2] = b;
+                if rgba {
+                    out[base + 3] = 255;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod bayer_tests {
+    use super::{bayer_grbg16_to_rgb, Resolution};
+
+    #[test]
+    fn decodes_2x2_grbg10_block() {
+        // GRBG layout:  G R
+        //               B G
+        // Raw 10-bit samples packed as little-endian u16 (value in low 10 bits).
+        let g1 = 400u16; // -> 100 after >>2
+        let r = 800u16; // -> 200 after >>2
+        let b = 40u16; // -> 10 after >>2
+        let g2 = 404u16; // -> 101 after >>2
+
+        let mut data = Vec::new();
+        for v in [g1, r, b, g2] {
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+
+        let resolution = Resolution::new(2, 2);
+        let rgb = bayer_grbg16_to_rgb(resolution, &data, 10, false).expect("decode failed");
+
+        assert_eq!(rgb.len(), 2 * 2 * 3);
+        // Every pixel in the 2x2 block should carry the same demosaiced triplet.
+        for px in rgb.chunks_exact(3) {
+            assert_eq!(px, [200, 100, 10]);
+        }
+    }
+
+    #[test]
+    fn decodes_buffer_with_trailing_extra_bytes() {
+        // Same 2x2 block as `decodes_2x2_grbg10_block`, but with a whole extra
+        // "row" of bytes appended after the pixel data - e.g. an embedded
+        // metadata/register-readback line some v4l2 CSI drivers append to
+        // `sizeimage` without changing the reported `height`. Rows themselves stay
+        // tightly packed (no per-row padding); the trailing bytes should just be
+        // ignored rather than rejected.
+        let g1 = 400u16;
+        let r = 800u16;
+        let b = 40u16;
+        let g2 = 404u16;
+
+        let mut data = Vec::new();
+        for v in [g1, r, b, g2] {
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+        data.extend_from_slice(&[0xAA, 0xAA, 0xAA, 0xAA]); // trailing extra "row"
+
+        let resolution = Resolution::new(2, 2);
+        let rgb = bayer_grbg16_to_rgb(resolution, &data, 10, false).expect("decode failed");
+
+        assert_eq!(rgb.len(), 2 * 2 * 3);
+        for px in rgb.chunks_exact(3) {
+            assert_eq!(px, [200, 100, 10]);
+        }
+    }
+
+    #[test]
+    fn rejects_odd_resolution() {
+        let resolution = Resolution::new(3, 2);
+        let data = vec![0u8; 3 * 2 * 2];
+        assert!(bayer_grbg16_to_rgb(resolution, &data, 10, false).is_err());
+    }
+
+    #[test]
+    fn rejects_bad_buffer_size() {
+        let resolution = Resolution::new(2, 2);
+        let data = vec![0u8; 3]; // too short
+        assert!(bayer_grbg16_to_rgb(resolution, &data, 10, false).is_err());
+    }
 }

@@ -176,7 +176,9 @@ pub trait CaptureBackendTrait {
             | FrameFormat::YUYV
             | FrameFormat::RAWRGB
             | FrameFormat::RAWBGR
-            | FrameFormat::NV12 => 3,
+            | FrameFormat::NV12
+            | FrameFormat::BA10
+            | FrameFormat::BA12 => 3,
             FrameFormat::GRAY => 1,
         };
         if alpha {

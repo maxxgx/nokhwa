@@ -2362,6 +2362,13 @@ mod internal {
                         error: "Unsupported frame format BGR".to_string(),
                     });
                 }
+                FrameFormat::BA10 | FrameFormat::BA12 => {
+                    return Err(NokhwaError::SetPropertyError {
+                        property: "setVideoSettings".to_string(),
+                        value: "set frame format".to_string(),
+                        error: "Unsupported frame format: raw Bayer (BA10/BA12) is a V4L2-only sensor format".to_string(),
+                    });
+                }
             };
             let obj = CFNumber::from(cmpixelfmt as i32);
             let obj = obj.as_CFTypeRef() as *mut Object;

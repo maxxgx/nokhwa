@@ -242,6 +242,15 @@ mod internal {
                 }),
             }?;
 
+            // Some drivers (notably MIPI/GMSL capture nodes fronting an ISP, e.g. Intel
+            // IPU6/IPU7 `isys` nodes) report a generic step-wise VIDIOC_ENUM_FRAMESIZES range
+            // (like 1x1-8160x8190) for every pixel format, regardless of what the sensor
+            // behind them can actually produce. Stepping across a range like that fabricates
+            // thousands of bogus resolutions. In that case we can't trust the range at all, so
+            // fall back to whatever VIDIOC_G_FMT reports as the currently negotiated
+            // resolution for that fourcc - it's the only size we know actually works.
+            let current_fmt = device.format().ok();
+
             for ff in frame_formats {
                 let framefmt = match fourcc_to_frameformat(ff) {
                     Some(s) => s,
@@ -260,12 +269,16 @@ mod internal {
                             FrameSizeEnum::Discrete(d) => {
                                 [Resolution::new(d.width, d.height)].to_vec()
                             }
-                            // we step over each step, getting a new resolution.
-                            FrameSizeEnum::Stepwise(s) => (s.min_width..s.max_width)
-                                .step_by(s.step_width as usize)
-                                .zip((s.min_height..s.max_height).step_by(s.step_height as usize))
-                                .map(|(x, y)| Resolution::new(x, y))
-                                .collect(),
+                            // Stepwise ranges are frequently a generic placeholder rather than
+                            // real sensor capability (see comment above); only trust it for the
+                            // fourcc that is actually negotiated right now, using its real
+                            // width/height instead of stepping across the whole range.
+                            FrameSizeEnum::Stepwise(_) => match &current_fmt {
+                                Some(cur) if cur.fourcc == ff => {
+                                    vec![Resolution::new(cur.width, cur.height)]
+                                }
+                                _ => vec![],
+                            },
                         }
                     })
                     .flat_map(|res| {
@@ -405,22 +418,36 @@ mod internal {
 
         fn get_resolution_list(&self, fourcc: FrameFormat) -> Result<Vec<Resolution>, NokhwaError> {
             let format = frameformat_to_fourcc(fourcc);
+            let device = self.lock_device()?;
 
-            match self.lock_device()?.enum_framesizes(format) {
+            match device.enum_framesizes(format) {
                 Ok(frame_sizes) => {
+                    // Same reasoning as in `V4LCaptureDevice::new()`: some drivers (notably
+                    // MIPI/GMSL capture nodes fronting an ISP, e.g. Intel IPU6/IPU7 `isys`
+                    // nodes) report an identical generic step-wise VIDIOC_ENUM_FRAMESIZES
+                    // range for every pixel format, regardless of what the sensor behind
+                    // them can actually produce. Stepping across (or even just taking the
+                    // endpoints of) a range like that fabricates bogus resolutions, so we
+                    // only trust it for the fourcc that is actually negotiated right now,
+                    // using its real negotiated width/height instead.
+                    let current_fmt = device.format().ok();
+
                     let mut resolutions = vec![];
                     for frame_size in frame_sizes {
                         match frame_size.size {
                             FrameSizeEnum::Discrete(dis) => {
                                 resolutions.push(Resolution::new(dis.width, dis.height));
                             }
-                            FrameSizeEnum::Stepwise(step) => {
-                                resolutions.push(Resolution::new(step.min_width, step.min_height));
-                                resolutions.push(Resolution::new(step.max_width, step.max_height));
-                                // TODO: Respect step size
+                            FrameSizeEnum::Stepwise(_) => {
+                                if let Some(cur) = &current_fmt {
+                                    if cur.fourcc == format {
+                                        resolutions.push(Resolution::new(cur.width, cur.height));
+                                    }
+                                }
                             }
                         }
                     }
+                    resolutions.dedup();
                     Ok(resolutions)
                 }
                 Err(why) => Err(NokhwaError::GetPropertyError {
@@ -485,6 +512,8 @@ mod internal {
                 FrameFormat::RAWRGB => FourCC::new(b"RGB3"),
                 FrameFormat::RAWBGR => FourCC::new(b"BGR3"),
                 FrameFormat::NV12 => FourCC::new(b"NV12"),
+                FrameFormat::BA10 => FourCC::new(b"BA10"),
+                FrameFormat::BA12 => FourCC::new(b"BA12"),
             };
 
             let format = Format::new(new_fmt.width(), new_fmt.height(), v4l_fcc);
@@ -858,6 +887,10 @@ mod internal {
             "RGB3" => Some(FrameFormat::RAWRGB),
             "BGR3" => Some(FrameFormat::RAWBGR),
             "NV12" => Some(FrameFormat::NV12),
+            // V4L2_PIX_FMT_SGRBG10, 10-bit raw Bayer GRBG straight off the sensor
+            "BA10" => Some(FrameFormat::BA10),
+            // V4L2_PIX_FMT_SGRBG12, 12-bit raw Bayer GRBG straight off the sensor
+            "BA12" => Some(FrameFormat::BA12),
             _ => None,
         }
     }
@@ -870,6 +903,8 @@ mod internal {
             FrameFormat::RAWRGB => FourCC::new(b"RGB3"),
             FrameFormat::RAWBGR => FourCC::new(b"BGR3"),
             FrameFormat::NV12 => FourCC::new(b"NV12"),
+            FrameFormat::BA10 => FourCC::new(b"BA10"),
+            FrameFormat::BA12 => FourCC::new(b"BA12"),
         }
     }
 }
