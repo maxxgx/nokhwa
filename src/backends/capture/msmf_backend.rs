@@ -49,11 +49,12 @@ impl MediaFoundationCaptureDevice {
     /// This function will error if Media Foundation fails to get the device.
     pub fn new(index: &CameraIndex, camera_fmt: RequestedFormat) -> Result<Self, NokhwaError> {
         let mut mf_device = MediaFoundationDevice::new(index.clone())?;
+        let s = &mf_device.symlink();
 
         let info = CameraInfo::new(
             &mf_device.name(),
             "MediaFoundation Camera Device",
-            &mf_device.symlink(),
+            format!("{{\"symlink\": \"{s}\"}}"),
             index.clone(),
         );
 

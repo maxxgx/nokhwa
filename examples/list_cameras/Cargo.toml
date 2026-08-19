@@ -1,0 +1,13 @@
+[package]
+name = "list_cameras"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+[dependencies.nokhwa]
+path = "../.."
+# EDIT THIS! Pick whatever native backend(s) you need for your platform.
+features = ["input-native"]

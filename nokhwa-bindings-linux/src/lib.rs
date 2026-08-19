@@ -30,6 +30,7 @@ mod internal {
         borrow::Cow,
         collections::HashMap,
         io::{self, ErrorKind},
+        path::PathBuf,
     };
     use v4l::v4l_sys::{
         V4L2_CID_BACKLIGHT_COMPENSATION, V4L2_CID_BRIGHTNESS, V4L2_CID_CONTRAST, V4L2_CID_EXPOSURE,
@@ -46,6 +47,8 @@ mod internal {
         video::{capture::Parameters, Capture},
         Device, Format, FourCC,
     };
+    #[cfg(target_os = "linux")]
+    mod linux_port_name;
 
     /// Attempts to convert a [`KnownCameraControl`] into a V4L2 Control ID.
     /// If the associated control is not found, this will return `None` (`ColorEnable`, `Roll`)
@@ -95,6 +98,18 @@ mod internal {
         }
     }
 
+    fn linux_unique_id(index: u32) -> Option<String> {
+        let serial = linux_port_name::device_serial(index).unwrap_or("".to_string());
+        let bus = linux_port_name::device_bus(index).unwrap_or("".to_string());
+        let sensor = if bus.to_lowercase().contains("usb") {
+            String::new()
+        } else {
+            linux_port_name::sensor_name(index).unwrap_or_default()
+        };
+
+        Some(format!("{{\"index\": {index}, \"serial\": \"{serial}\", \"bus\": \"{bus}\", \"sensor\": \"{sensor}\"}}"))
+    }
+
     /// query v4l2 cameras
     #[allow(clippy::unnecessary_wraps)]
     #[allow(clippy::cast_possible_truncation)]
@@ -103,12 +118,13 @@ mod internal {
             let camera_info: Vec<CameraInfo> = v4l::context::enum_devices()
                 .iter()
                 .map(|node| {
+                    let misc = linux_unique_id(node.index() as u32).unwrap_or_default();
                     CameraInfo::new(
                         &node
                             .name()
                             .unwrap_or(format!("{}", node.path().to_string_lossy())),
                         &format!("Video4Linux Device @ {}", node.path().to_string_lossy()),
-                        "",
+                        &misc,
                         CameraIndex::Index(node.index() as u32),
                     )
                 })
@@ -369,7 +385,7 @@ mod internal {
                 camera_info: CameraInfo::new(
                     &device_caps.card,
                     &device_caps.driver,
-                    &format!("{} {:?}", device_caps.bus, device_caps.version),
+                    &format!("{{ \"cap\": \"{} {:?}\"}}", device_caps.bus, device_caps.version),
                     index,
                 ),
                 device: shared_device,

@@ -406,6 +406,127 @@ fn media_devices() -> io::Result<Vec<PathBuf>> {
     Ok(result)
 }
 
+/*
+ * v4l2_capability, from <linux/videodev2.h>. `card` and `bus_info` are
+ * fixed-size ASCII byte arrays that may fill the whole field with no
+ * trailing NUL, so they're clamped to length rather than read as a CStr.
+ */
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct V4l2Capability {
+    driver: [u8; 16],
+    card: [u8; 32],
+    bus_info: [u8; 32],
+    version: u32,
+    capabilities: u32,
+    device_caps: u32,
+    reserved: [u32; 3],
+}
+
+/// `_IOR(type, nr, size)`, as defined by `<asm-generic/ioctl.h>`.
+const fn ior(ty: u32, nr: u32, size: u32) -> u32 {
+    const DIR_READ: u32 = 2;
+
+    (DIR_READ << 30) | (size << 16) | (ty << 8) | nr
+}
+
+const VIDIOC_QUERYCAP: u32 = ior(b'V' as u32, 0, mem::size_of::<V4l2Capability>() as u32);
+
+fn bytes_to_string(bytes: &[u8]) -> Option<String> {
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    let text = String::from_utf8_lossy(&bytes[..end]).trim().to_string();
+
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+fn query_caps(index: u32) -> io::Result<V4l2Capability> {
+    let path = PathBuf::from(format!("/dev/video{index}"));
+    let file = File::open(&path)?;
+
+    let mut caps: V4l2Capability = unsafe { mem::zeroed() };
+
+    let ret = unsafe { libc::ioctl(file.as_raw_fd(), VIDIOC_QUERYCAP as _, &mut caps) };
+
+    if ret < 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    Ok(caps)
+}
+
+/// Walks up from `/sys/class/video4linux/video{index}/device` — typically a
+/// USB *interface* node (e.g. `.../1-3:1.0`) — to the USB *device* node
+/// (e.g. `.../1-3`) that carries `idVendor`/`idProduct`/`manufacturer`/
+/// `product`/`serial`. Returns `None` for non-USB devices (CSI/MIPI
+/// sensors), which have no such ancestor.
+fn find_usb_device_dir(index: u32) -> Option<PathBuf> {
+    let device_link = PathBuf::from(format!("/sys/class/video4linux/video{index}/device"));
+    let mut dir = fs::canonicalize(&device_link).ok()?;
+
+    loop {
+        if dir.join("idVendor").is_file() {
+            return Some(dir);
+        }
+
+        if !dir.pop() || dir == Path::new("/sys") {
+            return None;
+        }
+    }
+}
+
+fn read_sysfs_attr(dir: &Path, name: &str) -> Option<String> {
+    let text = fs::read_to_string(dir.join(name)).ok()?;
+    let text = text.trim();
+
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+/// Replicates udev's `udev_replace_whitespace()` + `udev_replace_chars()`
+/// well enough for the common case: runs of whitespace or punctuation
+/// outside `[A-Za-z0-9#+-.:=@]` collapse to a single `_`, with no leading,
+/// trailing, or doubled `_`.
+fn encode_component(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+
+    for ch in raw.trim().chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '#' | '+' | '-' | '.' | ':' | '=' | '@') {
+            out.push(ch);
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+
+    out.trim_end_matches('_').to_string()
+}
+
+pub fn device_serial(index: u32) -> Option<String> {
+    let dir = find_usb_device_dir(index)?;
+
+    let serial = read_sysfs_attr(&dir, "serial")
+        .map(|s| encode_component(&s))
+        .unwrap_or(String::new());
+
+    Some(serial)
+}
+
+
+/// Bus location for `/dev/video{index}`, from the V4L2 `bus_info` field
+/// (e.g. `"usb-0000:00:14.0-3"` for USB, `"platform:..."` for CSI/SoC
+/// sensors). Distinguishes otherwise-identical devices by where they're
+/// physically attached; unlike `sensor_name`, it needs no media-controller
+/// graph and is available for USB webcams too.
+pub fn device_bus(index: u32) -> Option<String> {
+    bytes_to_string(&query_caps(index).ok()?.bus_info)
+}
+
 /// Name of the camera sensor feeding `/dev/video{index}`, according to the
 /// media-controller graph the device belongs to.
 ///
