@@ -54,7 +54,7 @@ impl MediaFoundationCaptureDevice {
         let info = CameraInfo::new(
             &mf_device.name(),
             "MediaFoundation Camera Device",
-            format!("{{\"symlink\": \"{s}\"}}"),
+            format!("{{\"symlink\": \"{s}\"}}").as_str(),
             index.clone(),
         );
 
