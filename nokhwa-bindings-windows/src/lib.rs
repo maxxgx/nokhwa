@@ -46,6 +46,7 @@ pub mod wmf {
             Arc,
         },
     };
+    use std::fmt::format;
     use windows::Win32::Media::DirectShow::{CameraControl_Flags_Auto, CameraControl_Flags_Manual};
     use windows::Win32::Media::MediaFoundation::{
         MFCreateSample, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
@@ -343,10 +344,11 @@ pub mod wmf {
                 })?
         };
 
+        let s =  &symlink;
         Ok(CameraInfo::new(
             &name,
             "MediaFoundation Camera",
-            &symlink,
+            format!("{{\"symlink\": \"{s}\"}}").as_str(),
             index,
         ))
     }
@@ -501,7 +503,7 @@ pub mod wmf {
                     let mut id_eq = None;
 
                     for mfdev in devicelist {
-                        if mfdev.misc() == s {
+                        if mfdev.device_meta_json() == s {
                             id_eq = Some(mfdev.index().as_index()?);
                             break;
                         }
@@ -550,7 +552,7 @@ pub mod wmf {
         }
 
         pub fn symlink(&self) -> String {
-            self.device_specifier.misc()
+            self.device_specifier.device_meta_json()
         }
 
         pub fn compatible_format_list(&mut self) -> Result<Vec<CameraFormat>, NokhwaError> {

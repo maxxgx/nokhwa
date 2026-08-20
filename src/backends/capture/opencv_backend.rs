@@ -126,7 +126,7 @@ impl OpenCvCaptureDevice {
         let camera_info = CameraInfo::new(
             format!("OpenCV Capture Device {index}").as_str(),
             index.to_string().as_str(),
-            "",
+            "{}",
             index.clone(),
         );
 

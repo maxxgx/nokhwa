@@ -534,8 +534,8 @@ mod internal {
             manufacturer, model_id, device_type, position, lens_aperture
         );
         let misc = nsstr_to_str(unsafe { msg_send![device, uniqueID] });
-
-        CameraInfo::new(name.as_ref(), &description, misc.as_ref(), index)
+        let m = misc.as_ref();
+        CameraInfo::new(name.as_ref(), &description, format!("{{\"uuid\":\"{m}\"}}").as_str(), index)
     }
 
     #[derive(Copy, Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
@@ -854,7 +854,7 @@ mod internal {
 
                     match devices.get(*idx as usize) {
                         Some(device) => Ok(AVCaptureDevice::from_id(
-                            &device.misc(),
+                            &device.device_meta_json(),
                             Some(index.clone()),
                         )?),
                         None => Err(NokhwaError::OpenDeviceError(

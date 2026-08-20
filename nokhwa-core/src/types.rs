@@ -574,7 +574,7 @@ impl Display for CameraFormat {
 pub struct CameraInfo {
     human_name: String,
     description: String,
-    misc: String,
+    device_meta_json: String,
     index: CameraIndex,
 }
 
@@ -586,11 +586,11 @@ impl CameraInfo {
     // OK, i just checkeed back on this code. WTF was I on when I wrote `&(impl AsRef<str> + ?Sized)` ????
     // I need to get on the same shit that my previous self was on, because holy shit that stuff is strong as FUCK!
     // Finally fixed this insanity. Hopefully I didn't torment anyone by actually putting this in a stable release.
-    pub fn new(human_name: &str, description: &str, misc: &str, index: CameraIndex) -> Self {
+    pub fn new(human_name: &str, description: &str, device_meta_json: &str, index: CameraIndex) -> Self {
         CameraInfo {
             human_name: human_name.to_string(),
             description: description.to_string(),
-            misc: misc.to_string(),
+            device_meta_json: device_meta_json.to_string(),
             index,
         }
     }
@@ -631,15 +631,15 @@ impl CameraInfo {
     /// # JS-WASM
     /// This is exported as a `get_MiscString`.
     #[must_use]
-    pub fn misc(&self) -> String {
-        self.misc.clone()
+    pub fn device_meta_json(&self) -> String {
+        self.device_meta_json.clone()
     }
 
     /// Set the device info's misc.
     /// # JS-WASM
     /// This is exported as a `set_MiscString`.
     pub fn set_misc(&mut self, misc: &str) {
-        self.misc = misc.to_string();
+        self.device_meta_json = misc.to_string();
     }
 
     /// Get a reference to the device info's index.
@@ -681,7 +681,7 @@ impl Display for CameraInfo {
         write!(
             f,
             "Name: {}, Description: {}, Extra: {}, Index: {}",
-            self.human_name, self.description, self.misc, self.index
+            self.human_name, self.description, self.device_meta_json, self.index
         )
     }
 }
