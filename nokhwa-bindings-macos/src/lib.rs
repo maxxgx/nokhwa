@@ -535,7 +535,7 @@ mod internal {
         );
         let misc = nsstr_to_str(unsafe { msg_send![device, uniqueID] });
         let m = misc.as_ref();
-        CameraInfo::new(name.as_ref(), &description, format!("{{\"uuid\":{m}}}"), index)
+        CameraInfo::new(name.as_ref(), &description, format!("{{\"uuid\":\"{m}\"}}").as_str(), index)
     }
 
     #[derive(Copy, Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
