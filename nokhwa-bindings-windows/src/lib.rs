@@ -348,7 +348,7 @@ pub mod wmf {
         Ok(CameraInfo::new(
             &name,
             "MediaFoundation Camera",
-            format!("{{\"symlink\": \"{s}\"}}"),
+            format!("{{\"symlink\": \"{s}\"}}").as_str(),
             index,
         ))
     }
