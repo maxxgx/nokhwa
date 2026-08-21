@@ -22,9 +22,9 @@ fn main() {
     println!("found {} camera(s)\n", cameras.len());
 
     for info in &cameras {
-        if !can_open(info.index().clone()){
-            continue;
-        }
+        // if !can_open(info.index().clone()){
+        //     continue;
+        // }
         println!("================================================================");
         println!("index:            `{}`", info.index());
         println!("name:             `{}`", info.human_name());

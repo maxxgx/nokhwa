@@ -867,14 +867,20 @@ mod internal {
             }
         }
 
+        fn extract_uuid(input: &str) -> Option<&str> {
+            let re = Regex::new(r#""uuid"\s*:\s*"([^"]+)""#).unwrap();
+            re.captures(input)?.get(1).map(|m| m.as_str())
+        }
+
         pub fn from_id(id: &str, index_hint: Option<CameraIndex>) -> Result<Self, NokhwaError> {
-            let nsstr_id = str_to_nsstr(id);
+            let _id: &str = AVCaptureDevice::extract_uuid(id).unwrap();
+            let nsstr_id = str_to_nsstr(_id);
             let avfoundation_capture_cls = class!(AVCaptureDevice);
             let capture: *mut Object =
                 unsafe { msg_send![avfoundation_capture_cls, deviceWithUniqueID: nsstr_id] };
             if capture.is_null() {
                 return Err(NokhwaError::OpenDeviceError(
-                    id.to_string(),
+                    _id.to_string(),
                     "Device is null".to_string(),
                 ));
             }
@@ -2383,6 +2389,8 @@ mod internal {
     use core_foundation::base::TCFType;
     use core_foundation::number::CFNumber;
     use core_video_sys::kCVPixelBufferPixelFormatTypeKey;
+    use regex::Regex;
+
     impl Default for AVCaptureVideoDataOutput {
         fn default() -> Self {
             let cls = class!(AVCaptureVideoDataOutput);
