@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #[cfg(target_os = "macos")]
-use flume::{Receiver, Sender};
+use flume::{Receiver, RecvTimeoutError, Sender};
 #[cfg(target_os = "macos")]
 use nokhwa_bindings_macos::{
     AVCaptureDevice, AVCaptureDeviceInput, AVCaptureSession, AVCaptureVideoCallback,
@@ -31,7 +31,7 @@ use nokhwa_core::{
     },
 };
 #[cfg(target_os = "macos")]
-use std::{ffi::CString, sync::Arc};
+use std::{ffi::CString, sync::Arc, time::Duration};
 
 use std::{borrow::Cow, collections::HashMap};
 
@@ -286,11 +286,18 @@ impl CaptureBackendTrait for AVFoundationCaptureDevice {
     }
 
     fn frame_raw(&mut self) -> Result<Cow<[u8]>, NokhwaError> {
-        let result = match self.frame_buffer_receiver.recv() {
+        // Don't block forever: a format that never delivers frames would otherwise
+        // wedge the caller (and anything waiting on it, e.g. stop_stream).
+        match self
+            .frame_buffer_receiver
+            .recv_timeout(Duration::from_secs(2))
+        {
             Ok(recv) => Ok(Cow::from(recv.0)),
+            Err(RecvTimeoutError::Timeout) => Err(NokhwaError::ReadFrameError(
+                "timed out waiting for frame".to_string(),
+            )),
             Err(why) => Err(NokhwaError::ReadFrameError(why.to_string())),
-        };
-        result
+        }
     }
 
     fn stop_stream(&mut self) -> Result<(), NokhwaError> {
