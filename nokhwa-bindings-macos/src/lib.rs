@@ -1034,15 +1034,30 @@ mod internal {
 
                     // If requested FPS is inside the range, use it
                     if requested_fps >= min_fps - 0.001 && requested_fps <= max_fps + 0.001 {
-                        selected_format = format.internal;
-                        selected_range = range.inner;
-                        selected_min_fps = min_fps;
-                        selected_max_fps = max_fps;
+                        // Some UVC cameras list the same size/fps as both `yuvs` and `420v`,
+                        // and only one of them streams (e.g. `yuvs` 640x480 delivers no
+                        // frames). Prefer the 420v/420f variant; otherwise keep the first match.
+                        let subtype = unsafe { CMFormatDescriptionGetMediaSubType(format_desc_ref) };
+                        #[allow(non_upper_case_globals)]
+                        let preferred = matches!(
+                            subtype,
+                            kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+                                | kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+                        );
+                        if selected_format.is_null() || preferred {
+                            selected_format = format.internal;
+                            selected_range = range.inner;
+                            selected_min_fps = min_fps;
+                            selected_max_fps = max_fps;
+                        }
                         // println!(
                         //     "[set_all]   ✅ Selected range: {:.3} - {:.3}",
                         //     min_fps, max_fps
                         // );
-                        break 'format_loop;
+                        if preferred {
+                            break 'format_loop;
+                        }
+                        continue 'format_loop;
                     }
                 }
             }
